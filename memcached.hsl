@@ -1,0 +1,109 @@
+class Memcached
+{
+	private $address = none;
+	private $port = none;
+	private $timeout = none;
+	private $socket = none;
+
+	constructor($address, $opts = [])
+	{
+		$this->address = $address;
+		$this->port = $opts["port"] ?? 11211;
+		$this->timeout = $opts["timeout"] ?? 5;
+	}
+
+	function connect()
+	{
+		$this->socket = Socket(Socket::AF($this->address), "SOCK_STREAM");
+		if (!$this->socket->settimeout($this->timeout)) return;
+		if (!$this->socket->connect($this->address, $this->port)) return;
+		return true;
+	}
+
+	function disconnect()
+	{
+		if (!$this->socket)
+			return;
+
+		$this->socket->shutdown("SHUT_RDWR");
+		$this->socket->close();
+	}
+
+	function set($key, $value, $flags = 0, $exptime = 0)
+	{
+		return $this->__store("set", $key, $flags, $exptime, $value);
+	}
+
+	function get($key)
+	{
+		return $this->__fetch("get", $key);
+	}
+
+	function add($key, $value, $flags = 0, $exptime = 0)
+	{
+		return $this->__store("add", $key, $flags, $exptime, $value);
+	}
+
+	function del($key)
+	{
+		return $this->__delete($key);
+	}
+
+	function replace($key, $value, $flags = 0, $exptime = 0)
+	{
+		return $this->__store("replace", $key, $flags, $exptime, $value);
+	}
+
+	function append($key, $value, $flags = 0, $exptime = 0)
+	{
+		return $this->__store("append", $key, $flags, $exptime, $value);
+	}
+
+	function prepend($key, $value, $flags = 0, $exptime = 0)
+	{
+		return $this->__store("prepend", $key, $flags, $exptime, $value);
+	}
+
+	private function __fetch($command, $key)
+	{
+		if (!$this->socket->send("$command $key\r\n")) return;
+		$data = "";
+		while (true)
+		{
+			if (!$resp = $this->socket->recv(8192)) return;
+			$data .= $resp;
+			if ($data[-5:] == "END\r\n")
+				break;
+		}
+		$values = [];
+		$offset = 0;
+		while ($offset < length($data))
+		{
+			$lineEnd = str_find($data, "\r\n", $offset) - $offset;
+			$line = str_slice($data, $offset, $lineEnd);
+			[$type, $key, $flags, $length] = explode(" ", $line);
+			if ($type != "VALUE") break;
+			$offset += $lineEnd + 2;
+			$values[] = str_slice($data, $offset, $length);
+			$offset += number($length) + 2;
+		}
+		return $values;
+	}
+
+	private function __delete($key)
+	{
+		if (!$this->socket->send("delete $key\r\n")) return;
+		if (!$resp = $this->socket->recv(8192)) return;
+		$resp = str_strip($resp);
+		return $resp == "DELETED";
+	}
+
+	private function __store($command, $key, $flags, $exptime, $value)
+	{
+		$bytes = length($value);
+		if (!$this->socket->send("$command $key $flags $exptime $bytes\r\n$value\r\n")) return;
+		if (!$resp = $this->socket->recv(8192)) return;
+		$resp = str_strip($resp);
+		return $resp == "STORED";
+	}
+}
